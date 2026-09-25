@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pressure Logger</title>
+
+  <link rel="stylesheet" href="https://pyscript.net/releases/2025.8.1/core.css">
+  <script type="module" src="https://pyscript.net/releases/2025.8.1/core.js"></script>
+
+  <style>
+    :root {
+      --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #5b6573;
+      --border: #d8dde3; --accent: #2563eb; --accent-text: #ffffff;
+      --danger: #dc2626; --ok: #15803d; --warn: #b45309; --mono-bg: #f0f2f5;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111418; --panel: #1a1f25; --text: #e6e9ed; --muted: #97a1ad;
+        --border: #2d343c; --accent: #3b82f6; --accent-text: #ffffff;
+        --danger: #ef4444; --ok: #22c55e; --warn: #f59e0b; --mono-bg: #13171c;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 24px 16px; background: var(--bg); color: var(--text);
+      font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    main { max-width: 1000px; margin: 0 auto; display: grid; gap: 16px; }
+    h1 { font-size: 22px; margin: 0; }
+    h2 { font-size: 15px; margin: 0 0 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+    label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+    input, select {
+      font: inherit; color: var(--text); background: var(--bg);
+      border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; width: 100%;
+    }
+    .row { display: flex; gap: 8px; align-items: end; }
+    .row > label { flex: 1; }
+    button {
+      font: inherit; padding: 8px 14px; border-radius: 6px; cursor: pointer;
+      border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    }
+    button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+    button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+    .note { font-size: 12.5px; color: var(--muted); margin: 8px 0 0; }
+    .readouts { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+    .readout { border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+    .readout .k { font-size: 12px; color: var(--muted); }
+    .readout .v { font: 600 22px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 4px; word-break: break-all; }
+    .readout .u { font-size: 12px; color: var(--muted); }
+    #status { font-weight: 600; }
+    #status.running { color: var(--ok); }
+    #status.error { color: var(--danger); }
+    #status.idle { color: var(--muted); }
+    progress { width: 100%; height: 8px; margin-top: 10px; }
+    pre#log {
+      margin: 0; max-height: 220px; overflow: auto; background: var(--mono-bg);
+      border: 1px solid var(--border); border-radius: 6px; padding: 10px;
+      font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap;
+    }
+    .table-wrap { max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+    table { border-collapse: collapse; width: 100%; font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    th, td { padding: 6px 10px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    th { position: sticky; top: 0; background: var(--panel); font-family: system-ui, sans-serif; font-weight: 600; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Voltage / Pressure Logger</h1>
+    <p class="note">Status: <span id="status" class="idle">Loading Python…</span></p>
+  </header>
+
+  <!-- Replaces the two input() prompts at the top of the script -->
+  <section class="panel">
+    <h2>Output file</h2>
+    <div class="grid">
+      <div class="row">
+        <label>Save directory
+          <input id="save-dir" type="text" readonly placeholder="(browser download)">
+        </label>
+        <button id="pick-dir" disabled>Choose…</button>
+      </div>
+      <label>File name, no extension
+        <input id="file-name" type="text">
+      </label>
+    </div>
+    <p class="note">Choosing a folder (Chrome/Edge) rewrites the CSV there after every sample, like <code>csv_file.flush()</code>. Otherwise use "Download CSV".</p>
+  </section>
+
+  <section class="panel">
+    <h2>Acquisition settings</h2>
+    <div class="grid">
+      <label>Number of samples
+        <input id="max-samples" type="number" min="1" step="1" value="40">
+      </label>
+      <label>Rough gauge source
+        <select id="rough-mode">
+          <option value="sim">Simulated</option>
+          <option value="serial">Web Serial (real device)</option>
+        </select>
+      </label>
+    </div>
+    <p class="note">The NI-DAQ (Dev1/ai0) and Agilent 34401A (VISA/USB) cannot be reached from a browser, so they are simulated. The rough gauge can use the real RS-232 port through Web Serial (Chrome/Edge). Fixed settings: 1 s sample interval, 1200 baud, command <code>#01RD\r</code>.</p>
+  </section>
+
+  <section class="panel">
+    <div class="buttons">
+      <button id="start" class="primary" disabled>Start</button>
+      <button id="stop" class="danger" disabled>Stop</button>
+      <button id="download" disabled>Download CSV</button>
+      <button id="clear" disabled>Clear</button>
+    </div>
+    <progress id="progress" value="0" max="40"></progress>
+  </section>
+
+  <!-- Live values: the print(f"Time: ...") output plus each CSV column -->
+  <section class="panel">
+    <h2>Live readings</h2>
+    <div class="readouts">
+      <div class="readout"><div class="k">Elapsed time</div><div class="v" id="out-time">–</div><div class="u">s</div></div>
+      <div class="readout"><div class="k">Rough pressure</div><div class="v" id="out-rough">–</div><div class="u">Pa</div></div>
+      <div class="readout"><div class="k">Fine pressure</div><div class="v" id="out-fine">–</div><div class="u">Pa</div></div>
+      <div class="readout"><div class="k">Voltage</div><div class="v" id="out-volt">–</div><div class="u">V DC</div></div>
+      <div class="readout"><div class="k">Samples</div><div class="v" id="out-count">0</div><div class="u" id="out-file">–</div></div>
+    </div>
+  </section>
+
+  <!-- print() / error messages -->
+  <section class="panel">
+    <h2>Log</h2>
+    <pre id="log"></pre>
+  </section>
+
+  <!-- The "prints recorded in terminal" section at the end of the script -->
+  <section class="panel">
+    <h2>Recorded data</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>time_s</th><th>rough_pressure_pa</th><th>fine_pressure_pa</th><th>voltage_v</th></tr></thead>
+        <tbody id="data-body"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script type="py">
+import asyncio
+import csv
+import io
+import math
+import random
+from time import perf_counter_ns, time
+
+import js
+from pyodide.ffi import to_js
+from pyscript import document, window, when
+
+TORR_TO_PA = 133.3223684211
+SAMPLE_INTERVAL_S = 1.0
+BAUD_RATE = 1200
+COMMAND = "#01RD\r"  # 01 (ID) ReaD \r (carriage return)
+HEADER = ["time_s", "rough_pressure_pa", "fine_pressure_pa", "voltage_v"]
+
+
+def el(id_):
+    return document.getElementById(id_)
+
+
+def js_obj(d):
+    return to_js(d, dict_converter=js.Object.fromEntries)
+
+
+def log(msg):
+    stamp = js.Date.new().toLocaleTimeString()
+    box = el("log")
+    box.textContent += f"[{stamp}] {msg}\n"
+    box.scrollTop = box.scrollHeight
+
+
+def set_status(text, cls):
+    s = el("status")
+    s.textContent = text
+    s.className = cls
+
+
+# ---------------------------------------------------------------- instruments
+
+class SimulatedDAQ:
+    """Stands in for nidaqmx Task on Dev1/ai0 (gauge analog output, volts)."""
+    def read(self, t):
+        return 0.4 + 9.0 * math.exp(-t / 30) + random.gauss(0, 0.01)
+
+    def close(self):
+        pass
+
+
+class SimulatedVoltmeter:
+    """Stands in for the Agilent 34401A 'MEAS:VOLT:DC?' query."""
+    def query_ascii_values(self, _cmd):
+        return [1.0 + random.gauss(0, 0.002)]
+
+    def close(self):
+        pass
+
+
+class SimulatedRoughGauge:
+    """Replies like the real gauge: '*01 3.50E-03'."""
+    def __init__(self):
+        self.t0 = perf_counter_ns() / 1e9
+        self.pending = b""
+
+    async def open(self, _baud):
+        pass
+
+    async def write(self, _data):
+        t = perf_counter_ns() / 1e9 - self.t0
+        torr = 760 * math.exp(-t / 4) + 3.5e-3 * (1 + random.gauss(0, 0.02))
+        self.pending = f"*01 {torr:.2E}\r".encode()
+
+    async def readline(self, _timeout):
+        data, self.pending = self.pending, b""
+        return data
+
+    async def close(self):
+        pass
+
+
+class WebSerialRoughGauge:
+    """Real RS-232 gauge via the browser Web Serial API (replaces pyserial)."""
+    def __init__(self):
+        self.port = None
+        self.reader = None
+        self.buf = bytearray()
+        self.pump_task = None
+
+    async def open(self, baud):
+        if not hasattr(window.navigator, "serial"):
+            raise RuntimeError("Web Serial is not supported in this browser (use Chrome or Edge).")
+        self.port = await window.navigator.serial.requestPort()
+        await self.port.open(js_obj({"baudRate": baud, "dataBits": 8,
+                                     "parity": "none", "stopBits": 1}))
+        self.reader = self.port.readable.getReader()
+        self.pump_task = asyncio.ensure_future(self._pump())
+
+    async def _pump(self):
+        try:
+            while True:
+                result = await self.reader.read()
+                if result.done:
+                    break
+                self.buf.extend(result.value.to_py())
+        except Exception:
+            pass
+
+    async def write(self, data):
+        self.buf.clear()  # drop stale bytes so each reply matches its request
+        writer = self.port.writable.getWriter()
+        try:
+            await writer.write(js.Uint8Array.new(to_js(list(data))))
+        finally:
+            writer.releaseLock()
+
+    async def readline(self, timeout):
+        # Same idea as serial.readline() with timeout=0.2: return a line, or whatever arrived.
+        deadline = perf_counter_ns() / 1e9 + timeout
+        while perf_counter_ns() / 1e9 < deadline:
+            for term in (b"\n", b"\r"):
+                idx = self.buf.find(term)
+                if idx != -1:
+                    line = bytes(self.buf[: idx + 1])
+                    del self.buf[: idx + 1]
+                    return line
+            await asyncio.sleep(0.01)
+        line = bytes(self.buf)
+        self.buf.clear()
+        return line
+
+    async def close(self):
+        try:
+            if self.reader:
+                await self.reader.cancel()
+                self.reader.releaseLock()
+            if self.pump_task:
+                await self.pump_task
+            if self.port:
+                await self.port.close()
+        except Exception as e:
+            log(f"Serial close warning: {e}")
+
+
+# ---------------------------------------------------------------- state
+
+default_name = f"voltage_pressure_run_{int(time())}"
+el("file-name").value = default_name
+
+state = {
+    "rows": [],          # list of CSV rows (without header)
+    "dir_handle": None,  # FileSystemDirectoryHandle, if a folder was chosen
+    "running": False,
+    "stop": asyncio.Event(),
+}
+
+
+def output_filename():
+    name = el("file-name").value.strip() or default_name
+    if name.lower().endswith(".csv"):
+        name = name[:-4]
+    return f"{name}.csv"
+
+
+def csv_text():
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(HEADER)
+    w.writerows(state["rows"])
+    return buf.getvalue()
+
+
+async def save_to_folder():
+    handle = state["dir_handle"]
+    if handle is None:
+        return
+    fh = await handle.getFileHandle(output_filename(), js_obj({"create": True}))
+    writable = await fh.createWritable()
+    await writable.write(csv_text())
+    await writable.close()
+
+
+def add_table_row(row):
+    tr = document.createElement("tr")
+    for cell in row:
+        td = document.createElement("td")
+        td.textContent = str(cell)
+        tr.appendChild(td)
+    el("data-body").appendChild(tr)
+    wrap = el("data-body").parentElement.parentElement
+    wrap.scrollTop = wrap.scrollHeight
+
+
+def set_running(running):
+    state["running"] = running
+    for id_ in ("start", "pick-dir", "clear", "file-name", "max-samples", "rough-mode"):
+        el(id_).disabled = running
+    el("stop").disabled = not running
+    el("download").disabled = running or not state["rows"]
+
+
+# ---------------------------------------------------------------- acquisition
+
+async def run_acquisition():
+    try:
+        max_samples = int(el("max-samples").value)
+        if max_samples < 1:
+            raise ValueError
+    except ValueError:
+        set_status("Invalid settings", "error")
+        log("ERROR: number of samples must be a whole number ≥ 1.")
+        return
+
+    sample_interval_s = SAMPLE_INTERVAL_S
+    command = COMMAND
+
+    state["rows"].clear()
+    el("data-body").innerHTML = ""
+    state["stop"].clear()
+    el("progress").max = max_samples
+    el("progress").value = 0
+    el("out-file").textContent = output_filename()
+    set_running(True)
+
+    task = SimulatedDAQ()
+    voltage_meter = SimulatedVoltmeter()
+    ser = WebSerialRoughGauge() if el("rough-mode").value == "serial" else SimulatedRoughGauge()
+    rough_valuetorr = float("nan")
+
+    try:
+        await ser.open(BAUD_RATE)
+        set_status("Collecting data", "running")
+        log(f"Started: {max_samples} samples every {sample_interval_s} s -> {output_filename()}")
+
+        acquisition_start = perf_counter_ns() / 1e9
+        i = 0
+        while not state["stop"].is_set():
+            elapsed_s = perf_counter_ns() / 1e9 - acquisition_start
+
+            pressure_voltage_direct = task.read(elapsed_s)
+            voltage = voltage_meter.query_ascii_values("MEAS:VOLT:DC?")
+
+            try:
+                await ser.write(command.encode("utf-8"))
+                raw_response = await ser.readline(0.2)
+                response = raw_response.decode("utf-8").strip()  # e.g. "*01 3.50E-03"
+                value_str = response.split(" ", 1)[1]            # trim the "*01" device ID
+                rough_valuetorr = float(value_str)
+            except Exception as e:
+                log(f"Rough gauge read error (keeping last value): {e!r}")
+
+            fine_pressure = (pressure_voltage_direct / 100) * TORR_TO_PA
+            rough_pressure = rough_valuetorr * TORR_TO_PA
+
+            row = [f"{elapsed_s:.4f}", f"{rough_pressure:.6g}", f"{fine_pressure:.6g}", f"{voltage[0]:.6f}"]
+            state["rows"].append(row)
+            add_table_row(row)
+            await save_to_folder()
+
+            el("out-time").textContent = f"{elapsed_s:.4f}"
+            el("out-rough").textContent = f"{rough_pressure:.4g}"
+            el("out-fine").textContent = f"{fine_pressure:.4g}"
+            el("out-volt").textContent = f"{voltage[0]:.6f}"
+            el("out-count").textContent = str(i + 1)
+            el("progress").value = i + 1
+
+            i += 1
+            if i >= max_samples:
+                break
+
+            next_sample_time = acquisition_start + i * sample_interval_s
+            sleep_time = next_sample_time - perf_counter_ns() / 1e9
+            if sleep_time > 0:
+                try:  # wakes immediately if Stop is pressed
+                    await asyncio.wait_for(state["stop"].wait(), sleep_time)
+                except asyncio.TimeoutError:
+                    pass
+
+        if state["stop"].is_set():
+            log(f"Stopped by user after {i} samples.")
+        else:
+            log(f"Finished: {i} samples recorded.")
+        set_status("Idle", "idle")
+
+    except Exception as e:
+        set_status("Error – check device connection", "error")
+        log(f"WARNING: unable to read from devices. Check connection to devices. Code: {e}")
+
+    finally:  # close all open channels
+        task.close()
+        voltage_meter.close()
+        await ser.close()
+        try:
+            await save_to_folder()
+        except Exception as e:
+            log(f"Could not save to folder: {e}")
+        set_running(False)
+
+
+# ---------------------------------------------------------------- buttons
+
+@when("click", "#start")
+async def on_start(event):
+    if not state["running"]:
+        await run_acquisition()
+
+
+@when("click", "#stop")
+def on_stop(event):
+    state["stop"].set()
+
+
+@when("click", "#pick-dir")
+async def on_pick_dir(event):
+    if not hasattr(window, "showDirectoryPicker"):
+        log("Folder picking isn't supported in this browser; use Download CSV instead.")
+        return
+    try:
+        handle = await window.showDirectoryPicker(js_obj({"mode": "readwrite"}))
+    except Exception:
+        return  # user cancelled
+    state["dir_handle"] = handle
+    el("save-dir").value = handle.name
+    log(f"Save directory set to '{handle.name}'.")
+
+
+@when("click", "#download")
+def on_download(event):
+    blob = js.Blob.new(to_js([csv_text()]), js_obj({"type": "text/csv"}))
+    url = js.URL.createObjectURL(blob)
+    a = document.createElement("a")
+    a.href = url
+    a.download = output_filename()
+    a.click()
+    js.URL.revokeObjectURL(url)
+
+
+@when("click", "#clear")
+def on_clear(event):
+    state["rows"].clear()
+    el("data-body").innerHTML = ""
+    el("log").textContent = ""
+    for id_ in ("out-time", "out-rough", "out-fine", "out-volt"):
+        el(id_).textContent = "–"
+    el("out-count").textContent = "0"
+    el("progress").value = 0
+    el("download").disabled = True
+
+
+set_running(False)
+set_status("Idle", "idle")
+log("Python ready.")
+</script>
+</body>
+</html>
